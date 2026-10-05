@@ -1,0 +1,9 @@
+dataset:
+  input_path: pretrain_dataset/GTT23_train.hdf5
+  output_path: pretrain_process_dataset/GTT23-NetCLR
+  batch_size: 1024
+
+netclr:
+  # 保留前 10000 个方向；短序列在末尾补 0。
+  sequence_length: 10000
+  feature_dtype: int8

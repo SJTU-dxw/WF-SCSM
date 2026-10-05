@@ -1,0 +1,9 @@
+dataset:
+  input_path: pretrain_dataset/GTT23_train.hdf5
+  output_path: pretrain_process_dataset/GTT23-TraVerse
+  batch_size: 1024
+
+traverse:
+  # 每个流最多保留前 300 个 burst。
+  max_bursts: 300
+  template: "Traffic of browsing a website: <flow>: <burst sequence>: {burst feature}."

@@ -1,0 +1,12 @@
+dataset:
+  input_path: pretrain_dataset/GTT23_train.hdf5
+  output_path: pretrain_process_dataset/GTT23-Swallow-single
+  batch_size: 1024
+
+# 2700长度，最少加载20s, 最多加载80s
+cif:
+  slot_count: 2700
+  time_window_multiplier: 3.0
+  min_slot_duration: 0.0074074
+  max_slot_duration: 0.0296296
+  feature_dtype: uint16

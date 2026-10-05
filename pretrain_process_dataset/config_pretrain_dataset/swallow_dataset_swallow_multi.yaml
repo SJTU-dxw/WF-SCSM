@@ -1,0 +1,12 @@
+dataset:
+  input_path: pretrain_dataset/Swallow_train.hdf5
+  output_path: pretrain_process_dataset/Swallow-Swallow-multi
+  batch_size: 1024
+
+# 7200长度，最少加载40s, 最多加载320s
+cif:
+  slot_count: 7200
+  time_window_multiplier: 3.0
+  min_slot_duration: 0.0055555
+  max_slot_duration: 0.0444444
+  feature_dtype: uint16

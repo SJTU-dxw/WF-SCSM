@@ -1,0 +1,48 @@
+method: scsm
+dataset:
+  path: pretrain_dataset/Swallow_train.hdf5
+  max_day: 49
+  batch_size: 128
+  num_workers: 10
+  pin_memory: true
+train:
+  seed: 0
+  optimizer: adamw
+  learning_rate: 0.0005
+  min_learning_rate: 0.0
+  warmup_steps: 1000
+  betas: [0.9, 0.95]
+  weight_decay: 0.05
+  max_epochs: 1500
+  accumulation_steps: 1
+  grad_clip: null
+  amp: false
+  log_every_steps: 100
+output:
+  directory: output/pretrain/swallow_dataset/ablation/no_augmentation
+  save_every_steps: 10000
+model:
+  max_matrix_length: 2700
+  maximum_cell_number: 2
+  embedding_dim: 512
+  depth: 3
+  drop_path_rate: 0.2
+  simple_mode: true
+  kernel_size: 5
+augmentation:
+  segment_aug: false
+  segment_aug_num: 2
+  combine_aug: false
+  combine_min: 2
+  combine_max: 5
+  max_overlap_ratio: 0.5
+  maximum_load_time: 120
+  adaptive_slot: false
+  min_slot_time: 0.005
+  max_slot_time: 0.05
+  time_interval_threshold: 0.1
+  log_transform: true
+  mask: false
+  mask_ratio: 0.5
+objective:
+  temperature: 0.07

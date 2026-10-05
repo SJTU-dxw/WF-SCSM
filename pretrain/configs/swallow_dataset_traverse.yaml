@@ -1,0 +1,38 @@
+method: traverse
+dataset:
+  path: pretrain_process_dataset/Swallow-TraVerse
+  max_day: 49
+  batch_size: 2
+  num_workers: 4
+  pin_memory: true
+  max_length: 512
+train:
+  seed: 0
+  learning_rate: 0.0002
+  min_learning_rate: 0.000002
+  warmup_steps: 1000
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  max_epochs: 300
+  accumulation_steps: 16
+  grad_clip: 1.0
+  amp: false
+  amp_dtype: bfloat16
+  log_every_steps: 100
+output:
+  directory: output/pretrain/swallow_dataset/traverse
+  save_every_steps: 10000
+model:
+  pretrained_model: /nvme/dxw/SCSM/pretrain/Meta-Llama-3-8B
+  trust_remote_code: false
+  torch_dtype: bfloat16
+  bidirectional_attention: true
+  gradient_checkpointing: true
+  lora:
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+augmentation: {}
+objective:
+  mask_ratio: 0.20

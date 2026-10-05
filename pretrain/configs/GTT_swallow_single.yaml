@@ -1,0 +1,30 @@
+method: swallow
+dataset:
+  path: pretrain_process_dataset/GTT23-Swallow-single
+  max_day: 49
+  batch_size: 512
+  num_workers: 10
+  pin_memory: true
+train:
+  seed: 0
+  optimizer: sgd
+  learning_rate: 0.03
+  lr_schedule: constant
+  momentum: 0.9
+  weight_decay: 0.0004
+  max_epochs: 5
+  accumulation_steps: 1
+  grad_clip: null
+  amp: false
+  log_every_steps: 100
+output:
+  directory: output/pretrain/GTT_dataset/swallow-single
+  save_every_steps: 10000
+model:
+  name: resnet18
+  projection_hidden_dim: 512
+  projection_dim: 128
+  predictor_hidden_dim: 512
+augmentation: {}
+objective:
+  target_momentum: 0.996

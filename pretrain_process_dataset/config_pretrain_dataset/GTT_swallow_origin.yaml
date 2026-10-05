@@ -1,0 +1,12 @@
+dataset:
+  input_path: pretrain_dataset/GTT23_train.hdf5
+  output_path: pretrain_process_dataset/GTT23-Swallow-origin
+  batch_size: 1024
+
+# Swallow 原始设置：1000长度，最少加载20s，最多加载80s
+cif:
+  slot_count: 1000
+  time_window_multiplier: 3.0
+  min_slot_duration: 0.02
+  max_slot_duration: 0.08
+  feature_dtype: uint16

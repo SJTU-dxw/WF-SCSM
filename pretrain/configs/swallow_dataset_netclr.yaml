@@ -1,0 +1,38 @@
+method: netclr
+dataset:
+  path: pretrain_process_dataset/Swallow-NetCLR
+  max_day: 49
+  batch_size: 256
+  num_workers: 10
+  pin_memory: true
+train:
+  seed: 0
+  optimizer: adam
+  learning_rate: 0.0003
+  min_learning_rate: 0.0
+  warmup_steps: 0
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  max_epochs: 1500
+  accumulation_steps: 1
+  grad_clip: 1.0
+  amp: false
+  amp_dtype: float16
+  log_every_steps: 100
+output:
+  directory: output/pretrain/swallow_dataset/netclr
+  save_every_steps: 10000
+model:
+  channels: [32, 64, 128, 256]
+  input_length: 10000
+  kernel_size: 8
+  pool_size: 8
+  pool_stride: 4
+  conv_stride: 1
+  dropout: 0.10
+  embedding_dim: 512
+  projection_dim: 128
+augmentation:
+  cdf_sample_size: 1000
+objective:
+  temperature: 0.5
