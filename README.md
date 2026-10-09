@@ -16,7 +16,7 @@ The example below uses only the Hugging Face releases and standard Python librar
 pip install -U "datasets==3.6.0"
 ```
 
-`datasets==3.6.0` supports the custom dataset loaders used by these releases. Run the following in a fresh Python session. It evaluates all traces with at least 80 packets using five-scale averaged features and cosine 5-NN. Swallow uses D1 as the reference for D2–D7; DF uses leave-one-out kNN. Accuracies are macro-averaged across websites.
+`datasets==3.6.0` supports the custom dataset loaders used by these releases. Run the following in a fresh Python session. It evaluates all four released encoders on traces with at least 80 packets using five-scale averaged features and cosine 5-NN. Processor configurations are explicit: Single uses 2700 windows and Multi uses 7200, both with `maximum_cell_number=2`. Swallow uses D1 as the reference for D2–D7; DF uses leave-one-out kNN. Accuracies are macro-averaged across websites.
 
 ```python
 import sys
@@ -29,24 +29,31 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import normalize
 from tqdm import tqdm
 
-# Model and processor implementations come from the HF model snapshot.
-folder = snapshot_download("2594306528-dxw/WF-SCSM-Swallow-Single")
-sys.path.insert(0, folder)
+# Explicit processor configuration for each encoder.
+MODEL_CONFIGS = {
+    "WF-SCSM-Swallow-Single": dict(max_matrix_length=2700, maximum_cell_number=2),
+    "WF-SCSM-Swallow-Multi": dict(max_matrix_length=7200, maximum_cell_number=2),
+    "WF-SCSM-GTT-Single": dict(max_matrix_length=2700, maximum_cell_number=2),
+    "WF-SCSM-GTT-Multi": dict(max_matrix_length=7200, maximum_cell_number=2),
+}
+PROCESSING_CONFIG = dict(
+    slot_times=np.linspace(0.005, 0.05, 5),  # Five temporal scales, in seconds.
+    time_interval_threshold=0.1,
+    log_transform=True,
+    normalize_times=True,
+)
+folders = {name: snapshot_download(f"2594306528-dxw/{name}") for name in MODEL_CONFIGS}
+sys.path.insert(0, next(iter(folders.values())))
 from scsm_hub import HubSCSM
 from processing_scsm import SCSMProcessor
 
-model = HubSCSM.from_pretrained(folder, map_location="cpu").cuda().eval()
-processor = SCSMProcessor.from_pretrained(folder)
-
 @torch.inference_mode()
-def encode(dataset):
+def encode(dataset, model, processor):
     features, labels, days = [], [], []
     for sample in tqdm(dataset, desc="Extracting features"):
         if sample["length"] < 80:
             continue
-        inputs = processor(sample["times"], sample["directions"],
-                           slot_times=np.linspace(0.005, 0.05, 5),
-                           time_interval_threshold=0.1, log_transform=True)
+        inputs = processor(sample["times"], sample["directions"], **PROCESSING_CONFIG)
         feature = model(inputs["matrix"].cuda(), inputs["last_index"].cuda()).mean(0)
         features.append(feature.cpu().numpy())
         labels.append(sample["label"])
@@ -56,28 +63,34 @@ def encode(dataset):
 swallow = load_dataset("2594306528-dxw/wf_scsm_swallow", "all", trust_remote_code=True)["train"]
 df = load_dataset("2594306528-dxw/wf_scsm_df_closed", trust_remote_code=True)["train"]
 
-for name, dataset in [("Swallow", swallow), ("DF", df)]:
-    x, y, days = encode(dataset)
-    knn = KNeighborsClassifier(n_neighbors=5, metric="cosine", n_jobs=-1)
-    if name == "DF":
-        knn.fit(x, y)
-        # None excludes each sample from its own neighbors.
-        print(f"DF kNN: {accuracy(y, knn.predict(None)):.2%}")
-        continue
+for model_name, processor_config in MODEL_CONFIGS.items():
+    print(f"\n{model_name}")
+    model = HubSCSM.from_pretrained(folders[model_name], map_location="cpu").cuda().eval()
+    processor = SCSMProcessor(**processor_config)
+    for name, dataset in [("Swallow", swallow), ("DF", df)]:
+        x, y, days = encode(dataset, model, processor)
+        knn = KNeighborsClassifier(n_neighbors=5, metric="cosine", n_jobs=-1)
+        if name == "DF":
+            knn.fit(x, y)
+            # None excludes each sample from its own neighbors.
+            print(f"DF kNN: {accuracy(y, knn.predict(None)):.2%}")
+            continue
 
-    reference = days == 49  # D1
-    knn.fit(x[reference], y[reference])
-    sites = np.unique(y[reference])
-    centroids = normalize(np.stack([x[reference & (y == site)].mean(0) for site in sites]))
-    centroid_clf = KNeighborsClassifier(n_neighbors=1, metric="cosine").fit(centroids, sites)
-    for period, day in enumerate([56, 63, 70, 77, 84, 91], start=2):
-        test = days == day
-        knn_acc = accuracy(y[test], knn.predict(x[test]))
-        centroid_acc = accuracy(y[test], centroid_clf.predict(x[test]))
-        print(f"D1 -> D{period}: kNN={knn_acc:.2%}, centroid={centroid_acc:.2%}")
+        reference = days == 49  # D1
+        knn.fit(x[reference], y[reference])
+        sites = np.unique(y[reference])
+        centroids = normalize(np.stack([x[reference & (y == site)].mean(0) for site in sites]))
+        centroid_clf = KNeighborsClassifier(n_neighbors=1, metric="cosine").fit(centroids, sites)
+        for period, day in enumerate([56, 63, 70, 77, 84, 91], start=2):
+            test = days == day
+            knn_acc = accuracy(y[test], knn.predict(x[test]))
+            centroid_acc = accuracy(y[test], centroid_clf.predict(x[test]))
+            print(f"D1 -> D{period}: kNN={knn_acc:.2%}, centroid={centroid_acc:.2%}")
+    del model
+    torch.cuda.empty_cache()
 ```
 
-Change the model ID passed to `snapshot_download` to evaluate another released encoder. This example uses [scikit-learn's default uniform-vote kNN](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html); its tie handling differs from the similarity-sum tie breaker in the original evaluator. Feature extraction runs on CUDA, while scikit-learn kNN runs on the CPU.
+Remove entries from `MODEL_CONFIGS` to evaluate only selected encoders. Both Single and Multi encoders are evaluated on the released single-tab Swallow and DF datasets here. This example uses [scikit-learn's default uniform-vote kNN](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html); its tie handling differs from the similarity-sum tie breaker in the original evaluator. Feature extraction runs on CUDA, while scikit-learn kNN runs on the CPU.
 
 ## Documentation
 
