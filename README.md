@@ -10,79 +10,74 @@ SCSM constructs paired traffic views through **Segmentation, Combination, Scalin
 
 [Datasets](https://huggingface.co/collections/2594306528-dxw/scsm-dataset) · [Pretrained models](https://huggingface.co/collections/2594306528-dxw/scsm-model)
 
-After [environment setup](doc/1-environment.md), install the additional dependencies and run the example below from the repository root:
+The example below uses only the Hugging Face releases and standard Python libraries; cloning this repository is not required. A CUDA environment with PyTorch, Mamba, causal-conv1d, and timm is required; see [environment setup](doc/1-environment.md).
 
 ```bash
-pip install -U huggingface_hub safetensors scikit-learn
+pip install -U "datasets==3.6.0"
 ```
 
-This example downloads a pretrained encoder and both datasets. It uses five-scale averaged features and cosine 5-NN, reports Swallow D1-to-D2–D7 reference kNN and reference-centroid accuracy, and computes DF leave-one-out kNN accuracy. All results are macro-averaged across websites; traces shorter than 80 packets are excluded.
+`datasets==3.6.0` supports the custom dataset loaders used by these releases. Run the following in a fresh Python session. It evaluates all traces with at least 80 packets using five-scale averaged features and cosine 5-NN. Swallow uses D1 as the reference for D2–D7; DF uses leave-one-out kNN. Accuracies are macro-averaged across websites.
 
 ```python
-import json
-from pathlib import Path
-
-import h5py
-import hdf5plugin
+import sys
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download, snapshot_download
-from safetensors.torch import load_file
-from sklearn.metrics import balanced_accuracy_score
+from datasets import load_dataset
+from huggingface_hub import snapshot_download
+from sklearn.metrics import balanced_accuracy_score as accuracy
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import normalize
-from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from model.scsm import SCSM
-from feature_similarity.evaluate import TraceDataset, extract_embeddings
+# Model and processor implementations come from the HF model snapshot.
+folder = snapshot_download("2594306528-dxw/WF-SCSM-Swallow-Single")
+sys.path.insert(0, folder)
+from scsm_hub import HubSCSM
+from processing_scsm import SCSMProcessor
 
-model_id = "2594306528-dxw/WF-SCSM-Swallow-Single"
-folder = Path(snapshot_download(model_id, allow_patterns=["config.json", "model.safetensors"]))
-config = json.loads((folder / "config.json").read_text())
-model = SCSM(config)
-model.load_state_dict(load_file(str(folder / "model.safetensors")))
-model = model.cuda().eval()
-config.update(slot_strategy="ensemble", min_slot_time=0.005, max_slot_time=0.05,
-              test_slot_count=5, time_interval_threshold=0.1, log_transform=True)
+model = HubSCSM.from_pretrained(folder, map_location="cpu").cuda().eval()
+processor = SCSMProcessor.from_pretrained(folder)
 
-datasets = {
-    "swallow": ("2594306528-dxw/wf_scsm_swallow", "data/Swallow_train.hdf5"),
-    "df": ("2594306528-dxw/wf_scsm_df_closed", "data/DF_train.hdf5"),
-}
-for name, (repo, filename) in datasets.items():
-    path = Path(hf_hub_download(repo, filename, repo_type="dataset"))
-    with h5py.File(path, "r") as f:
-        days, labels = f["day"][:], f["labels"][:]
-        periods = (days.astype(int) - 49) // 7 if name == "swallow" else np.zeros(len(days), int)
-        records = [(int(periods[i]), int(i), labels[i])
-                   for i in np.flatnonzero(f["lengths"][:] >= 80)]
-    loader = DataLoader(TraceDataset(path, records, "scsm", config), batch_size=32)
-    embeddings = extract_embeddings(model, loader, torch.device("cuda"), "scsm")
-    sites = sorted(site for period, site in embeddings if period == 0)
+@torch.inference_mode()
+def encode(dataset):
+    features, labels, days = [], [], []
+    for sample in tqdm(dataset, desc="Extracting features"):
+        if sample["length"] < 80:
+            continue
+        inputs = processor(sample["times"], sample["directions"],
+                           slot_times=np.linspace(0.005, 0.05, 5),
+                           time_interval_threshold=0.1, log_transform=True)
+        feature = model(inputs["matrix"].cuda(), inputs["last_index"].cuda()).mean(0)
+        features.append(feature.cpu().numpy())
+        labels.append(sample["label"])
+        days.append(sample["day"])
+    return normalize(np.stack(features)), np.array(labels), np.array(days)
 
-    def pack(period):
-        x = np.concatenate([embeddings[(period, site)] for site in sites])
-        y = np.concatenate([np.full(len(embeddings[(period, site)]), i)
-                            for i, site in enumerate(sites)])
-        return x, y
+swallow = load_dataset("2594306528-dxw/wf_scsm_swallow", "all", trust_remote_code=True)["train"]
+df = load_dataset("2594306528-dxw/wf_scsm_df_closed", trust_remote_code=True)["train"]
 
-    x_ref, y_ref = pack(0)
-    knn = KNeighborsClassifier(n_neighbors=5, metric="cosine", n_jobs=-1).fit(x_ref, y_ref)
-    if name == "df":
-        # X=None excludes each indexed point from its own neighbors.
-        print(f"DF kNN: {balanced_accuracy_score(y_ref, knn.predict(None)):.2%}")
+for name, dataset in [("Swallow", swallow), ("DF", df)]:
+    x, y, days = encode(dataset)
+    knn = KNeighborsClassifier(n_neighbors=5, metric="cosine", n_jobs=-1)
+    if name == "DF":
+        knn.fit(x, y)
+        # None excludes each sample from its own neighbors.
+        print(f"DF kNN: {accuracy(y, knn.predict(None)):.2%}")
         continue
 
-    centroids = normalize(np.stack([embeddings[(0, site)].mean(0) for site in sites]))
-    centroid_clf = KNeighborsClassifier(n_neighbors=1, metric="cosine").fit(centroids, np.arange(len(sites)))
-    for period in range(1, 7):
-        x, y = pack(period)
-        knn_acc = balanced_accuracy_score(y, knn.predict(x))
-        centroid_acc = balanced_accuracy_score(y, centroid_clf.predict(x))
-        print(f"D1 -> D{period + 1}: kNN={knn_acc:.2%}, centroid={centroid_acc:.2%}")
+    reference = days == 49  # D1
+    knn.fit(x[reference], y[reference])
+    sites = np.unique(y[reference])
+    centroids = normalize(np.stack([x[reference & (y == site)].mean(0) for site in sites]))
+    centroid_clf = KNeighborsClassifier(n_neighbors=1, metric="cosine").fit(centroids, sites)
+    for period, day in enumerate([56, 63, 70, 77, 84, 91], start=2):
+        test = days == day
+        knn_acc = accuracy(y[test], knn.predict(x[test]))
+        centroid_acc = accuracy(y[test], centroid_clf.predict(x[test]))
+        print(f"D1 -> D{period}: kNN={knn_acc:.2%}, centroid={centroid_acc:.2%}")
 ```
 
-Change `model_id` to evaluate another released encoder. This compact example uses [scikit-learn's default uniform-vote kNN](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html); its tie handling differs from the similarity-sum tie breaker in the original evaluator. Feature extraction runs on CUDA, while scikit-learn kNN runs on the CPU.
+Change the model ID passed to `snapshot_download` to evaluate another released encoder. This example uses [scikit-learn's default uniform-vote kNN](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html); its tie handling differs from the similarity-sum tie breaker in the original evaluator. Feature extraction runs on CUDA, while scikit-learn kNN runs on the CPU.
 
 ## Documentation
 
